@@ -98,6 +98,9 @@ export async function runList(args: string[]): Promise<void> {
       path: skill.canonicalPath,
       scope: skill.scope,
       agents: skill.agents.map((a) => agents[a].displayName),
+      ...(skill.disableModelInvocation && {
+        disableModelInvocation: skill.disableModelInvocation,
+      }),
     }));
     console.log(JSON.stringify(jsonOutput, null, 2));
     return;
