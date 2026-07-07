@@ -10,6 +10,7 @@ import {
   readFile,
   writeFile,
   stat,
+  chmod,
   realpath,
 } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -376,7 +377,7 @@ export async function installSkillForAgent(
     // actually used in this project. The skill is already available in .agents/skills/.
     if (!isGlobal && !isUniversalAgent(agentType)) {
       const agentRootDir = join(cwd, agents[agentType].skillsDir.split('/')[0]!);
-      if (!existsSync(agentRootDir)) {
+      if (!existsSync(agentRootDir) && agentType !== 'claude-code') {
         return {
           success: true,
           path: canonicalDir,
@@ -491,6 +492,8 @@ async function copyDirectory(src: string, dest: string, agentType?: AgentType): 
               dereference: true,
               recursive: true,
             });
+            const sourceStats = await stat(srcPath);
+            await chmod(destPath, sourceStats.mode & 0o777);
           } catch (err: unknown) {
             // Skip broken symlinks (e.g., pointing to absolute paths on another machine)
             // instead of aborting the entire install.
