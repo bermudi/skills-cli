@@ -8,7 +8,6 @@ import * as localLock from '../src/local-lock.ts';
 import * as skillLock from '../src/skill-lock.ts';
 import * as remove from '../src/remove.ts';
 import * as p from '@clack/prompts';
-import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
