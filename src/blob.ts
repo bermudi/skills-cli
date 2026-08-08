@@ -606,6 +606,7 @@ export async function tryBlobInstall(
     content: string;
     slug: string;
     metadata?: Record<string, unknown>;
+    disableModelInvocation?: boolean;
   }> = [];
 
   for (const { mdPath, content } of mdFetches) {
@@ -629,6 +630,7 @@ export async function tryBlobInstall(
       content,
       slug: toSkillSlug(safeName),
       metadata: data.metadata as Record<string, unknown> | undefined,
+      disableModelInvocation: data['disable-model-invocation'] === true,
     });
   }
 
@@ -691,6 +693,7 @@ export async function tryBlobInstall(
       path: '',
       rawContent: skill.content,
       metadata: skill.metadata,
+      disableModelInvocation: skill.disableModelInvocation,
       files,
       snapshotHash:
         files.length === download!.files.length ? download!.hash : computeSnapshotHash(files),
