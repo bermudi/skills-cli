@@ -129,6 +129,7 @@ export async function parseSkillMd(
     path: dirname(skillMdPath),
     rawContent: content,
     metadata,
+    disableModelInvocation: data['disable-model-invocation'] === true,
   };
 }
 

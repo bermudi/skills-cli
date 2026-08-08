@@ -1072,6 +1072,8 @@ export interface InstalledSkill {
   canonicalPath: string;
   scope: 'project' | 'global';
   agents: AgentType[];
+  /** When true, skill is hidden from the agent's system prompt. See Agent Skills spec. */
+  disableModelInvocation?: boolean;
 }
 
 /**
@@ -1212,6 +1214,7 @@ export async function listInstalledSkills(
               canonicalPath: skillDir,
               scope: scopeKey,
               agents: [scope.agentType],
+              disableModelInvocation: skill.disableModelInvocation,
             });
           }
           continue;
@@ -1304,6 +1307,7 @@ export async function listInstalledSkills(
             canonicalPath: skillDir,
             scope: scopeKey,
             agents: installedAgents,
+            disableModelInvocation: skill.disableModelInvocation,
           });
         }
       }
