@@ -1,239 +1,90 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents working on the `skills` CLI codebase.
+## Project
 
-## Project Overview
+`skills` is the CLI for the open agent skills ecosystem — a package manager that installs `SKILL.md` files into agent directories and tracks them in a lock file. This is a fork of `vercel-labs/skills` hosted at `bermudi/skills-cli`.
 
-`skills` is the CLI for the open agent skills ecosystem.
+## Stack
 
-## Commands
-
-| Command                       | Description                                         |
-| ----------------------------- | --------------------------------------------------- |
-| `skills`                      | Show banner with available commands                 |
-| `skills add <pkg>`            | Install skills from git repos, URLs, or local paths |
-| `skills use <pkg>@<skill>`    | Use one skill without installing                    |
-| `skills experimental_install` | Restore skills from skills-lock.json                |
-| `skills experimental_sync`    | Sync skills from node_modules into agent dirs       |
-| `skills list`                 | List installed skills (alias: `ls`)                 |
-| `skills update [skills...]`   | Update skills to latest versions                    |
-| `skills init [name]`          | Create a new SKILL.md template                      |
-
-Aliases: `skills a` works for `add`. `skills i`, `skills install` (no args) restore from `skills-lock.json`. `skills ls` works for `list`. `skills experimental_install` restores from `skills-lock.json`. `skills experimental_sync` crawls `node_modules` for skills.
+| | |
+|---|---|
+| Language | TypeScript (ESM) |
+| Runtime | Node.js |
+| Package manager | pnpm |
+| Build | obuild (bundles to `dist/cli.mjs`) |
+| Test runner | vitest |
+| Formatter | Prettier (enforced in CI) |
 
 ## Architecture
 
-```
-src/
-├── cli.ts           # Main entry point, command routing, init/check/update
-├── cli.test.ts      # CLI tests
-├── add.ts           # Core add command logic
-├── add-prompt.test.ts # Add prompt behavior tests
-├── add.test.ts      # Add command tests
-├── constants.ts      # Shared constants
-├── find.ts           # Find/search command
-├── list.ts          # List installed skills command
-├── list.test.ts     # List command tests
-├── remove.ts         # Remove command implementation
-├── remove.test.ts    # Remove command tests
-├── agents.ts        # Agent definitions and detection
-├── installer.ts     # Skill installation logic (symlink/copy) + listInstalledSkills
-├── skills.ts        # Skill discovery and parsing
-├── skill-lock.ts    # Global lock file management (~/.agents/.skill-lock.json)
-├── local-lock.ts    # Local lock file management (skills-lock.json, checked in)
-├── sync.ts          # Sync command - crawl node_modules for skills
-├── source-parser.ts # Parse git URLs, GitHub shorthand, local paths
-├── git.ts           # Git clone operations
-├── telemetry.ts     # Anonymous usage tracking
-├── types.ts         # TypeScript types
-├── plugin-manifest.ts # Plugin manifest discovery support
-├── prompts/         # Interactive prompt helpers
-│   └── search-multiselect.ts
-├── providers/       # Remote skill providers (GitHub, HuggingFace, Mintlify)
-│   ├── index.ts
-│   ├── registry.ts
-│   ├── types.ts
-│   └── wellknown.ts
-├── init.test.ts     # Init command tests
-├── use.ts           # Use command - generate a skill prompt or launch an agent
-├── use.test.ts      # Use command tests
-└── test-utils.ts    # Test utilities
+A single CLI entry point routes to command handlers in `src/`. Skills are installed by copying or symlinking `SKILL.md` files into agent-specific directories (`.claude/skills/`, `.cursor/skills/`, `.agents/skills/`, etc.). Two lock files track installations: a global one at `~/.agents/.skill-lock.json` and a project-level `skills-lock.json` (checked into repos).
 
-tests/
-├── cross-platform-paths.test.ts # Path normalization across platforms
-├── full-depth-discovery.test.ts # --full-depth skill discovery tests
-├── openclaw-paths.test.ts       # OpenClaw-specific path tests
-├── plugin-manifest-discovery.test.ts # Plugin manifest skill discovery
-├── sanitize-name.test.ts     # Tests for sanitizeName (path traversal prevention)
-├── skill-matching.test.ts    # Tests for filterSkills (multi-word skill name matching)
-├── source-parser.test.ts     # Tests for URL/path parsing
-├── installer-symlink.test.ts # Tests for symlink installation
-├── list-installed.test.ts    # Tests for listing installed skills
-├── skill-path.test.ts        # Tests for skill path handling
-├── wellknown-provider.test.ts # Tests for well-known provider
-├── xdg-config-paths.test.ts   # XDG global path handling tests
-└── dist.test.ts               # Tests for built distribution
-```
+**`skills` is not a harness.** It does not write system prompts, decide which skills an LLM sees, or invoke skills at runtime. Harnesses (Claude Code, Devin, Cursor, etc.) read installed `SKILL.md` files directly from disk. This distinction is the reason the fork exists — see [Fork Notes](#fork-notes).
 
-## Update Checking System
+### Lock file format
 
-### How `skills check` and `skills update` Work
+Version 3. Key field: `skillFolderHash` (GitHub tree SHA for the skill folder). Older versions are wiped on read — users must reinstall to populate the new format.
 
-1. Read `~/.agents/.skill-lock.json` for installed skills
-2. Filter to GitHub-backed skills that have both `skillFolderHash` and `skillPath`
-3. For each skill, call `fetchSkillFolderHash(source, skillPath, token)`. Tree requests start anonymously, then use an explicit `GITHUB_TOKEN`/`GH_TOKEN`, then `gh api` without exporting the GitHub CLI credential.
-4. `fetchSkillFolderHash` calls the GitHub Trees API (`/git/trees/<branch>?recursive=1` for `main`, then `master` fallback); update checks fall back to an authenticated Git clone when API access is unavailable.
-5. Compare latest folder tree SHA with lock file `skillFolderHash`; mismatch means update available
-6. `skills update` reinstalls changed skills by invoking the current CLI entrypoint directly (`node <repo>/bin/cli.mjs add <source-tree-url> -g -y`) to avoid nested npm exec/npx behavior
-
-### Lock File Compatibility
-
-The lock file format is v3. Key field: `skillFolderHash` (GitHub tree SHA for the skill folder).
-
-If reading an older lock file version, it's wiped. Users must reinstall skills to populate the new format.
-
-## Key Integration Points
-
-| Feature                    | Implementation                                                |
-| -------------------------- | ------------------------------------------------------------- |
-| `skills add`               | `src/add.ts` - full implementation                            |
-| `skills experimental_sync` | `src/sync.ts` - crawl node_modules                            |
-| `skills check`             | `src/cli.ts` + `fetchSkillFolderHash` in `src/skill-lock.ts`  |
-| `skills update`            | `src/cli.ts` direct hash compare + reinstall via `skills add` |
-
-## Development
+## Workflow
 
 ```bash
-# Install dependencies
-pnpm install
-
-# Build
-pnpm build
-
-# Test locally
-pnpm dev add vercel-labs/agent-skills --list
-pnpm dev experimental_sync
-pnpm dev check
-pnpm dev update
-pnpm dev init my-skill
-
-# Run all tests
-pnpm test
-
-# Run specific test file(s)
-pnpm test tests/sanitize-name.test.ts
-pnpm test tests/skill-matching.test.ts tests/source-parser.test.ts
-
-# Type check
-pnpm type-check
-
-# Format code
-pnpm format
-
-# Check formatting
-pnpm format:check
-
-# Validate and sync agent metadata/docs
-pnpm run -C scripts validate-agents.ts
-pnpm run -C scripts sync-agents.ts
+pnpm install          # install deps
+pnpm build            # build dist/ (the symlinked CLI picks this up immediately)
+pnpm test             # run all tests
+pnpm test tests/foo.test.ts  # run specific test file(s)
+pnpm type-check       # tsc --noEmit
+pnpm format           # Prettier — run before committing (CI enforces this)
 ```
 
-## Code Style
-
-This project uses Prettier for code formatting. **Always run `pnpm format` before committing changes** to ensure consistent formatting.
-
-```bash
-# Format all files
-pnpm format
-
-# Check formatting without fixing
-pnpm format:check
-```
-
-CI will fail if code is not properly formatted.
-
-## Installing (this fork)
-
-This fork is **not published to npm**. The global `skills` command is symlinked to
-the local checkout (see [Fork Notes](#fork-notes)), so "installing" means building
-the repo and letting the symlink pick it up:
-
-```bash
-pnpm install   # first time, or after dependency changes
-pnpm build     # rebuild dist/; the symlinked `skills` reflects it immediately
-```
-
-Do not run `npm publish` — there is no publish path for this fork.
-
-## Adding a New Agent
-
-1. Add the agent definition to `src/agents.ts`
-2. Run `pnpm run -C scripts validate-agents.ts` to validate
-3. Run `pnpm run -C scripts sync-agents.ts` to update README.md and package keywords
+To add a new agent: add its definition to `src/agents.ts`, then run `pnpm run -C scripts validate-agents.ts` and `pnpm run -C scripts sync-agents.ts` (updates README.md and package keywords).
 
 ## Fork Notes
 
-This repository is a fork of `vercel-labs/skills`. The fork is hosted at `bermudi/skills-cli` and `origin` is configured to point to that fork, while `upstream` points to `vercel-labs/skills`.
+### Why this fork exists
 
-### Custom changes
+`skills` manages files that harnesses read directly. Users customize how their harness treats a skill by editing the installed `SKILL.md` frontmatter (e.g. `disable-model-invocation: true`). But `skills update` overwrites installed files with fresh upstream copies — silently destroying local edits. Upstream doesn't address this because the use case is invisible to it: `skills` doesn't know about frontmatter fields it doesn't parse, and it doesn't know that harnesses read the files it installs.
 
-This fork keeps exactly two features on top of upstream:
+The fork bridges that gap with two features. See `docs/fork-changes.md` for implementation details (file paths, function names, test coverage).
 
-#### 1. `disable-model-invocation` frontmatter field
+### Custom features
 
-When `disable-model-invocation: true` is set in a `SKILL.md` frontmatter, the skill is hidden from the agent's system prompt and users must explicitly invoke it via `/skill:name`.
+#### 1. Frontmatter preservation across updates
 
-Key changes:
+On update, captures installed `SKILL.md` frontmatter before reinstalling, merges it back after. Local frontmatter wins for any key present in it (shallow merge: `{ ...upstreamFm, ...localFm }`). Always on; `--no-preserve-frontmatter` discards local edits.
 
-- `src/types.ts` — adds `disableModelInvocation?: boolean` to the `Skill` interface
-- `src/skills.ts` — parses `disable-model-invocation` in `parseSkillMd`
-- `src/blob.ts` — carries the field through the blob install path
-- `src/installer.ts` — surfaces the field on `InstalledSkill` and `listInstalledSkills`
-- `src/list.ts` — includes the field in `--json` output only when `true`
-- `tests/skill-matching.test.ts` — adds tests for the new field
+**Trade-off:** if the user modified a field locally and upstream also changed that same field, the local value wins — masking intentional upstream changes. Fields the user never touched always follow upstream. Nested objects like `metadata` are replaced wholesale, not deep-merged.
+
+**Known limitations:**
+
+- **YAML re-serialization.** The entire frontmatter block is re-serialized via `yaml.stringify()`. YAML comments are lost and key order follows the merge (upstream keys first, then local-only keys). The body is preserved as-is.
+- **Copy mode with multiple agents.** `listInstalledSkills` deduplicates by `scope:name`, so only one agent copy is found. If the user edited a different agent's copy, that edit is missed. Rare in practice — `skills update` reinstalls via symlink mode, so the canonical path exists after reinstall.
+- **Eve flat skills.** Eve installs skills as flat `.md` files (not `<name>/SKILL.md`), which this feature doesn't find. Preservation is a no-op for Eve flat skills.
+
+**Historical note:** the fork previously had a feature that parsed `disable-model-invocation` and recorded it in the lock file / `--json` output. That plumbing had no consumer and didn't preserve the field across updates. It has been replaced by this feature. The parse/record plumbing in `src/types.ts`, `src/skills.ts`, `src/blob.ts`, `src/installer.ts`, and `src/list.ts` is intentionally left as-is — do not remove it. It's harmless and upstream may eventually use it.
 
 #### 2. File-based `--debug` logging (never breaks the TUI)
 
 Debug output goes to a file instead of stderr so the Clack pretty TUI stays intact.
 
-- Default: `$XDG_STATE_HOME/skills/debug.log` else `~/.local/state/skills/debug.log`
+- Default path: `$XDG_STATE_HOME/skills/debug.log` else `~/.local/state/skills/debug.log`
 - Overrides (first wins): `--debug=/path` (rel to cwd), `SKILLS_DEBUG_FILE`, `SKILLS_DEBUG` when it looks like a path (`/` or `\` or ends with `.log`), else default
 - Escape hatch: `SKILLS_DEBUG=stderr` (or `SKILLS_DEBUG_FILE=stderr`) restores stderr
-- First write: `mkdir -p`, `>5MB` rotate to `debug.log.1`, header with ISO time, args, version (`bermudi fork`), cwd
-- Every `debug()`/`debugFs()`/`debugApi()` appends with `[HH:MM:SS.mmm] [debug:ns]` and redaction (Bearer tokens, `ghp_`/`gho_`/`github_pat_`, `token=`, `GITHUB_TOKEN=`), sync for `process.exit` safety
-- Exit: single `Debug log: ...` line to stderr
+- Rotation: `>5MB` rotates to `debug.log.1`; first write does `mkdir -p` and writes a header (ISO time, args, version, cwd)
+- Redaction: Bearer tokens, `ghp_`/`gho_`/`github_pat_`, `token=`, `GITHUB_TOKEN=` are redacted in every log line
+- Writes are sync for `process.exit` safety
+- On exit: single `Debug log: ...` line to stderr pointing at the file
 
-Key changes:
+### Installing
 
-- `src/debug.ts` (new, ~303 lines) — file sink, rotation, redaction, header, `getLogFilePath`/`getDisplayLogPath`/`setDebugFile`/`isStderrMode`/`isDebugEnabled`/`enableDebug`/`isDebugFlag`
-- `src/cli.ts` — parses `--debug`/`--verbose`/`-d` (including `--debug=/path`), propagates via `SKILLS_DEBUG_FILE` to `update` child, banner/version show `bermudi fork`, prints `Debug log: ...` at exit; added `Global Options` to help
-- Instrumented call sites: `src/skills.ts` (`hasSkillMd`, `parseSkillMd`, `findSkillDirs`, `discoverSkills` timing), `src/blob.ts` (tree fetches), `src/git.ts` (clone), `src/source-parser.ts` (API), `src/installer.ts` (FS ops), `src/local-lock.ts`/`src/skill-lock.ts`/`src/sync.ts`/`src/telemetry.ts`/`src/find.ts`
-- `src/debug.test.ts` (new) — unit tests for log path resolution/rotation; `src/cli.test.ts` — integration tests asserting output goes to file not stderr and `--json` stays pure; `src/test-utils.ts` — uses `spawnSync` for uniform stdout/stderr capture
+This fork is **not published to npm**. The global `skills` command is symlinked to the local checkout (`~/.local/bin/skills -> /home/daniel/build/skills-CLI/bin/cli.mjs`), so "installing" means `pnpm build`. Do not run `npm publish`.
 
 ### Syncing with upstream
-
-To pull the latest `vercel-labs/skills` changes and rebuild the installed CLI:
 
 ```bash
 git fetch upstream
 git rebase upstream/main
-pnpm install
-pnpm build
+pnpm install && pnpm build
+git push --force-with-lease origin main  # rebase rewrites history; force-push is expected here
 ```
 
-If the rebase rewrites `main`, push the updated branch to the fork with force-lease:
-
-```bash
-git push --force-with-lease origin main
-```
-
-The global `skills` command is directly symlinked to the local entrypoint at `~/.local/bin/skills -> /home/daniel/build/skills-CLI/bin/cli.mjs`, so after `pnpm build` the installed CLI reflects the current code immediately. It is not installed through npm or pnpm's global package store.
-
-### Backup branches
-
-- `backup/main` holds the pre-rebase merge history from `668aad7`.
-- `backup/pre-trim-2026-08-08` holds the state before trimming to two features (had store-only + debug). Delete once the trimmed history is stable.
-
-```bash
-git branch -D backup/main backup/pre-trim-2026-08-08
-```
+Force-pushing to `origin/main` is safe — it's your fork, nobody else branches off it. `--force-with-lease` prevents clobbering unexpected remote changes.

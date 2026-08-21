@@ -1,6 +1,12 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { updateProjectSkills, updateGlobalSkills, runUpdate } from '../src/update.ts';
+import {
+  updateProjectSkills,
+  updateGlobalSkills,
+  runUpdate,
+  parseUpdateOptions,
+} from '../src/update.ts';
+import { captureInstalledFrontmatter, restoreFrontmatter } from '../src/frontmatter-preserve.ts';
 import * as git from '../src/git.ts';
 import * as skills from '../src/skills.ts';
 import * as blob from '../src/blob.ts';
@@ -19,6 +25,21 @@ vi.mock('../src/local-lock.ts');
 vi.mock('../src/skill-lock.ts');
 vi.mock('../src/remove.ts');
 vi.mock('@clack/prompts');
+
+// Mock frontmatter-preserve so we can verify capture/restore are called/skipped
+vi.mock('../src/frontmatter-preserve.ts', () => ({
+  captureInstalledFrontmatter: vi.fn().mockResolvedValue(null),
+  restoreFrontmatter: vi.fn().mockResolvedValue(true),
+}));
+
+// Mock well-known provider for processWellKnownUpdates tests
+vi.mock('../src/providers/index.ts', () => ({
+  wellKnownProvider: {
+    fetchIndex: vi.fn().mockResolvedValue(null),
+    fetchSkillByEntry: vi.fn().mockResolvedValue(null),
+  },
+  computeWellKnownSkillDigest: vi.fn().mockReturnValue('digest'),
+}));
 
 // Mock fs to prevent actual file checks during test
 vi.mock('fs', async (importOriginal) => {
@@ -1057,5 +1078,262 @@ describe('Update Cleanup Unit Tests', () => {
 
       expect(process.exitCode).toBeUndefined();
     });
+  });
+});
+
+describe('parseUpdateOptions', () => {
+  it('defaults preserveFrontmatter to undefined (treated as true)', () => {
+    const opts = parseUpdateOptions([]);
+    expect(opts.preserveFrontmatter).toBeUndefined();
+  });
+
+  it('sets preserveFrontmatter to false with --no-preserve-frontmatter', () => {
+    const opts = parseUpdateOptions(['--no-preserve-frontmatter']);
+    expect(opts.preserveFrontmatter).toBe(false);
+  });
+
+  it('sets preserveFrontmatter to false alongside other flags', () => {
+    const opts = parseUpdateOptions(['-g', '-y', '--no-preserve-frontmatter']);
+    expect(opts.preserveFrontmatter).toBe(false);
+    expect(opts.global).toBe(true);
+    expect(opts.yes).toBe(true);
+  });
+
+  it('sets preserveFrontmatter to false with skill name args', () => {
+    const opts = parseUpdateOptions(['my-skill', '--no-preserve-frontmatter']);
+    expect(opts.preserveFrontmatter).toBe(false);
+    expect(opts.skills).toEqual(['my-skill']);
+  });
+});
+
+describe('frontmatter preservation in update flow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.exitCode = undefined;
+    process.env.DISABLE_TELEMETRY = '1';
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: true,
+      configurable: true,
+    });
+    // Default: spawnSync succeeds
+    vi.mocked(spawnSync).mockReturnValue({ status: 0 } as ReturnType<typeof spawnSync>);
+    // Default: capture returns null (no local frontmatter)
+    vi.mocked(captureInstalledFrontmatter).mockResolvedValue(null);
+    vi.mocked(restoreFrontmatter).mockResolvedValue(true);
+  });
+
+  it('skips capture/restore when --no-preserve-frontmatter is set', async () => {
+    // Set up blob to return a tree that differs from the lock hash
+    vi.mocked(blob.fetchRepoTree).mockResolvedValue({
+      sha: 'tree-sha',
+      tree: [{ path: 'skills/skill-a/SKILL.md', type: 'blob', sha: 'newhash' }],
+    } as any);
+    vi.mocked(blob.getSkillFolderHashFromTree).mockReturnValue('newhash-different');
+
+    await updateGlobalSkills({
+      global: true,
+      yes: true,
+      preserveFrontmatter: false,
+    });
+
+    expect(captureInstalledFrontmatter).not.toHaveBeenCalled();
+    expect(restoreFrontmatter).not.toHaveBeenCalled();
+  });
+
+  it('calls capture/restore when preserveFrontmatter is not set (default)', async () => {
+    vi.mocked(blob.fetchRepoTree).mockResolvedValue({
+      sha: 'tree-sha',
+      tree: [{ path: 'skills/skill-a/SKILL.md', type: 'blob', sha: 'newhash' }],
+    } as any);
+    vi.mocked(blob.getSkillFolderHashFromTree).mockReturnValue('newhash-different');
+    // Capture returns non-empty frontmatter so restore is called
+    vi.mocked(captureInstalledFrontmatter).mockResolvedValue({
+      name: 'skill-a',
+      'disable-model-invocation': true,
+    });
+
+    await updateGlobalSkills({
+      global: true,
+      yes: true,
+    });
+
+    expect(captureInstalledFrontmatter).toHaveBeenCalled();
+    expect(restoreFrontmatter).toHaveBeenCalled();
+  });
+
+  it('skips restore when capture returns null (no local frontmatter)', async () => {
+    vi.mocked(blob.fetchRepoTree).mockResolvedValue({
+      sha: 'tree-sha',
+      tree: [{ path: 'skills/skill-a/SKILL.md', type: 'blob', sha: 'newhash' }],
+    } as any);
+    vi.mocked(blob.getSkillFolderHashFromTree).mockReturnValue('newhash-different');
+    vi.mocked(captureInstalledFrontmatter).mockResolvedValue(null);
+
+    await updateGlobalSkills({
+      global: true,
+      yes: true,
+    });
+
+    expect(captureInstalledFrontmatter).toHaveBeenCalled();
+    expect(restoreFrontmatter).not.toHaveBeenCalled();
+  });
+
+  it('skips restore when capture returns empty object', async () => {
+    vi.mocked(blob.fetchRepoTree).mockResolvedValue({
+      sha: 'tree-sha',
+      tree: [{ path: 'skills/skill-a/SKILL.md', type: 'blob', sha: 'newhash' }],
+    } as any);
+    vi.mocked(blob.getSkillFolderHashFromTree).mockReturnValue('newhash-different');
+    vi.mocked(captureInstalledFrontmatter).mockResolvedValue({});
+
+    await updateGlobalSkills({
+      global: true,
+      yes: true,
+    });
+
+    expect(captureInstalledFrontmatter).toHaveBeenCalled();
+    expect(restoreFrontmatter).not.toHaveBeenCalled();
+  });
+
+  it('prints warning when restore fails (returns false)', async () => {
+    vi.mocked(blob.fetchRepoTree).mockResolvedValue({
+      sha: 'tree-sha',
+      tree: [{ path: 'skills/skill-a/SKILL.md', type: 'blob', sha: 'newhash' }],
+    } as any);
+    vi.mocked(blob.getSkillFolderHashFromTree).mockReturnValue('newhash-different');
+    vi.mocked(captureInstalledFrontmatter).mockResolvedValue({
+      name: 'skill-a',
+      'disable-model-invocation': true,
+    });
+    vi.mocked(restoreFrontmatter).mockResolvedValue(false);
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await updateGlobalSkills({
+      global: true,
+      yes: true,
+    });
+
+    expect(captureInstalledFrontmatter).toHaveBeenCalled();
+    expect(restoreFrontmatter).toHaveBeenCalled();
+
+    // Verify the warning was printed
+    const warningCall = consoleSpy.mock.calls.find((call) =>
+      call[0]?.includes('Frontmatter preservation failed')
+    );
+    expect(warningCall).toBeDefined();
+
+    consoleSpy.mockRestore();
+  });
+
+  it('calls capture/restore in updateProjectSkills with cwd parameter', async () => {
+    // Set up local lock with a project skill
+    vi.mocked(localLock.readLocalLock).mockResolvedValue({
+      version: 1,
+      skills: {
+        'skill-a': {
+          source: 'owner/repo',
+          sourceUrl: 'https://github.com/owner/repo.git',
+          skillPath: 'skills/skill-a/SKILL.md',
+          sourceType: 'github',
+          computedHash: 'abc',
+        },
+      },
+    });
+    vi.mocked(git.cloneRepo).mockResolvedValue('/tmp/repo');
+    vi.mocked(skills.discoverSkills).mockResolvedValue([
+      {
+        name: 'skill-a',
+        path: '/tmp/repo/skills/skill-a',
+        description: 'A',
+        rawContent: '',
+      },
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({ status: 0 } as ReturnType<typeof spawnSync>);
+    vi.mocked(captureInstalledFrontmatter).mockResolvedValue({
+      name: 'skill-a',
+      'disable-model-invocation': true,
+    });
+
+    await updateProjectSkills({ yes: true });
+
+    // Verify capture was called with (name, false, cwd) — the project path
+    expect(captureInstalledFrontmatter).toHaveBeenCalledWith('skill-a', false, expect.any(String));
+    expect(restoreFrontmatter).toHaveBeenCalledWith(
+      'skill-a',
+      expect.objectContaining({ 'disable-model-invocation': true }),
+      false,
+      expect.any(String)
+    );
+  });
+
+  it('skips capture/restore in updateProjectSkills when --no-preserve-frontmatter', async () => {
+    vi.mocked(localLock.readLocalLock).mockResolvedValue({
+      version: 1,
+      skills: {
+        'skill-a': {
+          source: 'owner/repo',
+          sourceUrl: 'https://github.com/owner/repo.git',
+          skillPath: 'skills/skill-a/SKILL.md',
+          sourceType: 'github',
+          computedHash: 'abc',
+        },
+      },
+    });
+    vi.mocked(git.cloneRepo).mockResolvedValue('/tmp/repo');
+    vi.mocked(skills.discoverSkills).mockResolvedValue([
+      {
+        name: 'skill-a',
+        path: '/tmp/repo/skills/skill-a',
+        description: 'A',
+        rawContent: '',
+      },
+    ]);
+    vi.mocked(spawnSync).mockReturnValue({ status: 0 } as ReturnType<typeof spawnSync>);
+
+    await updateProjectSkills({ yes: true, preserveFrontmatter: false });
+
+    expect(captureInstalledFrontmatter).not.toHaveBeenCalled();
+    expect(restoreFrontmatter).not.toHaveBeenCalled();
+  });
+
+  it('calls capture/restore in processWellKnownUpdates for project scope', async () => {
+    // Set up local lock with a well-known skill
+    vi.mocked(localLock.readLocalLock).mockResolvedValue({
+      version: 1,
+      skills: {
+        'wk-skill': {
+          source: 'https://example.com',
+          sourceType: 'well-known',
+          sourceUrl: 'https://example.com',
+          sourceBaseUrl: 'https://example.com',
+          wellKnownDigest: 'old-digest',
+          skillPath: 'wk-skill/SKILL.md',
+        },
+      },
+    });
+
+    // Mock well-known provider to report the skill as changed
+    const { wellKnownProvider } = await import('../src/providers/index.ts');
+    vi.mocked(wellKnownProvider.fetchIndex).mockResolvedValue({
+      entries: [{ name: 'wk-skill', version: '0.2.0', digest: 'new-digest' }],
+    } as any);
+    vi.mocked(wellKnownProvider.fetchSkillByEntry).mockResolvedValue({
+      installName: 'wk-skill',
+      content: '---\nname: wk-skill\ndescription: test\n---\n# Body',
+      slug: 'wk-skill',
+    } as any);
+
+    vi.mocked(spawnSync).mockReturnValue({ status: 0 } as ReturnType<typeof spawnSync>);
+    vi.mocked(captureInstalledFrontmatter).mockResolvedValue({
+      name: 'wk-skill',
+      'disable-model-invocation': true,
+    });
+
+    await updateProjectSkills({ yes: true });
+
+    // Verify capture was called for the well-known skill with project scope
+    expect(captureInstalledFrontmatter).toHaveBeenCalledWith('wk-skill', false, expect.any(String));
+    expect(restoreFrontmatter).toHaveBeenCalled();
   });
 });

@@ -231,7 +231,9 @@ function createGitClient(extraEnv?: NodeJS.ProcessEnv) {
 }
 
 async function resetTempDir(dir: string): Promise<void> {
+  debugFs('rm', dir, { recursive: true, force: true, reason: 'reset-temp' });
   await rm(dir, { recursive: true, force: true }).catch(() => {});
+  debugFs('mkdir', dir, { recursive: true, reason: 'reset-temp' });
   await mkdir(dir, { recursive: true });
 }
 
@@ -332,6 +334,7 @@ export async function cloneRepo(url: string, ref?: string): Promise<string> {
     const isAuthError = isAuthFailure(errorMessage);
 
     if (isTimeout) {
+      debugFs('rm', tempDir, { recursive: true, force: true, reason: 'clone-timeout' });
       await rm(tempDir, { recursive: true, force: true }).catch(() => {});
       const seconds = Math.round(CLONE_TIMEOUT_MS / 1000);
       throw new GitCloneError(
@@ -384,6 +387,7 @@ export async function cloneRepo(url: string, ref?: string): Promise<string> {
       }
     }
 
+    debugFs('rm', tempDir, { recursive: true, force: true, reason: 'clone-failure' });
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
 
     if (isAuthError) {
