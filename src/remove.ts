@@ -1,6 +1,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { readdir, rm, lstat } from 'fs/promises';
+import { debugFs } from './debug.ts';
 import { join } from 'path';
 import { agents, detectInstalledAgents, getEveSubagents } from './agents.ts';
 import { track } from './telemetry.ts';
@@ -278,6 +279,7 @@ export async function removeCommand(skillNames: string[], options: RemoveOptions
           try {
             const stats = await lstat(pathToCleanup).catch(() => null);
             if (stats) {
+              debugFs('rm', pathToCleanup, { recursive: true, force: true });
               await rm(pathToCleanup, { recursive: true, force: true });
             }
           } catch (err) {
@@ -306,6 +308,7 @@ export async function removeCommand(skillNames: string[], options: RemoveOptions
       }
 
       if (!isStillUsed) {
+        debugFs('rm', canonicalPath, { recursive: true, force: true });
         await rm(canonicalPath, { recursive: true, force: true });
       }
 

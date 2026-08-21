@@ -23,6 +23,7 @@ import {
   getDisplayLogPath,
   setDebugFile,
   isStderrMode,
+  debugFs,
 } from './debug.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -118,7 +119,7 @@ function showBanner(): void {
 
 function showHelp(): void {
   console.log(`
-${DIM}bermudi fork${RESET} ${DIM}(${VERSION}) · debug + disable-model-invocation${RESET}
+${DIM}bermudi fork${RESET} ${DIM}(${VERSION}) · debug + frontmatter preservation${RESET}
 ${BOLD}Usage:${RESET} skills <command> [options]
 
 ${BOLD}Manage Skills:${RESET}
@@ -141,6 +142,7 @@ ${BOLD}Update Options:${RESET}
   -g, --global           Update global skills only
   -p, --project          Update project skills only
   -y, --yes              Skip scope prompt (auto-detect: project if in a project, else global)
+  --no-preserve-frontmatter  Discard local frontmatter edits; use upstream copy as-is
 
 ${BOLD}Project:${RESET}
   experimental_install Restore skills from skills-lock.json
@@ -263,6 +265,7 @@ function runInit(args: string[]): void {
   }
 
   if (hasName) {
+    debugFs('mkdir', skillDir, { recursive: true });
     mkdirSync(skillDir, { recursive: true });
   }
 
@@ -286,6 +289,7 @@ Describe when this skill should be used.
 3. Additional steps as needed
 `;
 
+  debugFs('writeFile', skillFile, { bytes: skillContent.length });
   writeFileSync(skillFile, skillContent);
 
   console.log(`${TEXT}Initialized skill: ${DIM}${skillName}${RESET}`);

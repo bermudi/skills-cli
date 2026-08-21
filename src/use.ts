@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from 'fs/promises';
+import { debugFs } from './debug.ts';
 import { dirname, join, normalize, relative, resolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { agents } from './agents.ts';
@@ -165,6 +166,7 @@ export async function materializeUseSkill(skill: UseSkill): Promise<Materialized
     throw new Error('Invalid skill name: potential path traversal detected');
   }
 
+  debugFs('mkdir', skillDir, { recursive: true });
   await mkdir(skillDir, { recursive: true });
 
   if (skill.kind === 'blob') {
@@ -566,15 +568,19 @@ async function writeSafeFile(
   const fullPath = join(targetDir, filePath);
   if (!isPathSafe(targetDir, fullPath)) return;
 
+  debugFs('mkdir', dirname(fullPath), { recursive: true });
   await mkdir(dirname(fullPath), { recursive: true });
   if (typeof contents === 'string') {
+    debugFs('writeFile', fullPath, { bytes: contents.length });
     await writeFile(fullPath, contents, 'utf-8');
   } else {
+    debugFs('writeFile', fullPath, { bytes: contents.length });
     await writeFile(fullPath, contents);
   }
 }
 
 async function copySkillDirectory(src: string, dest: string): Promise<void> {
+  debugFs('mkdir', dest, { recursive: true });
   await mkdir(dest, { recursive: true });
   const entries = await readdir(src, { withFileTypes: true });
 
@@ -592,6 +598,7 @@ async function copySkillDirectory(src: string, dest: string): Promise<void> {
         }
 
         try {
+          debugFs('cp', srcPath, { dest: destPath, dereference: true, recursive: true });
           await cp(srcPath, destPath, { dereference: true, recursive: true });
         } catch (err) {
           if (

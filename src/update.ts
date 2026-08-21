@@ -28,6 +28,7 @@ import { sanitizeMetadata } from './sanitize.ts';
 import { track } from './telemetry.ts';
 import { agents, isUniversalAgent } from './agents.ts';
 import type { AgentType } from './types.ts';
+import { captureInstalledFrontmatter, restoreFrontmatter } from './frontmatter-preserve.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -48,6 +49,12 @@ export interface UpdateCheckOptions {
   yes?: boolean;
   /** Optional skill name(s) to filter on (positional args) */
   skills?: string[];
+  /**
+   * When true (default), locally-modified frontmatter fields are preserved
+   * across updates. Set to false via `--no-preserve-frontmatter` to get a
+   * clean upstream copy.
+   */
+  preserveFrontmatter?: boolean;
 }
 
 /**
@@ -72,6 +79,8 @@ export function parseUpdateOptions(args: string[]): UpdateCheckOptions {
       options.project = true;
     } else if (arg === '-y' || arg === '--yes') {
       options.yes = true;
+    } else if (arg === '--no-preserve-frontmatter') {
+      options.preserveFrontmatter = false;
     } else if (!arg.startsWith('-')) {
       positional.push(arg);
     }
@@ -454,6 +463,11 @@ export async function processWellKnownUpdates(
           ? ['--subagent', ...subagents.map((s) => (s === '' ? 'root' : s))]
           : [];
 
+      const localFm =
+        options.preserveFrontmatter !== false
+          ? await captureInstalledFrontmatter(name, isGlobal, isGlobal ? undefined : process.cwd())
+          : null;
+
       const spawnResult = spawnSync(
         process.execPath,
         [
@@ -474,6 +488,19 @@ export async function processWellKnownUpdates(
       );
 
       if (spawnResult.status === 0) {
+        if (localFm && Object.keys(localFm).length > 0) {
+          const ok = await restoreFrontmatter(
+            name,
+            localFm,
+            isGlobal,
+            isGlobal ? undefined : process.cwd()
+          );
+          if (!ok) {
+            console.log(
+              `  ${DIM}⚠ Frontmatter preservation failed for ${safeName} — local edits may be lost${RESET}`
+            );
+          }
+        }
         successCount++;
         console.log(`  ${TEXT}✓${RESET} Updated ${safeName}`);
       } else {
@@ -707,6 +734,12 @@ export async function updateGlobalSkills(
       continue;
     }
     const fullDepthArgs = shouldUseFullDepthForUpdate(update.entry) ? ['--full-depth'] : [];
+
+    const localFm =
+      options.preserveFrontmatter !== false
+        ? await captureInstalledFrontmatter(update.name, true)
+        : null;
+
     const result = spawnSync(
       process.execPath,
       [cliEntry, 'add', installUrl, '--skill', update.name, ...fullDepthArgs, '-g', '-y'],
@@ -724,6 +757,14 @@ export async function updateGlobalSkills(
     );
 
     if (result.status === 0) {
+      if (localFm && Object.keys(localFm).length > 0) {
+        const ok = await restoreFrontmatter(update.name, localFm, true);
+        if (!ok) {
+          console.log(
+            `  ${DIM}⚠ Frontmatter preservation failed for ${safeName} — local edits may be lost${RESET}`
+          );
+        }
+      }
       successCount++;
       console.log(`  ${TEXT}✓${RESET} Updated ${safeName}`);
     } else {
@@ -925,6 +966,11 @@ export async function updateProjectSkills(
         : [];
       const fullDepthArgs = shouldUseFullDepthForUpdate(entry) ? ['--full-depth'] : [];
 
+      const localFm =
+        options.preserveFrontmatter !== false
+          ? await captureInstalledFrontmatter(skill.name, false, cwd)
+          : null;
+
       const result = spawnSync(
         process.execPath,
         [
@@ -950,6 +996,14 @@ export async function updateProjectSkills(
       );
 
       if (result.status === 0) {
+        if (localFm && Object.keys(localFm).length > 0) {
+          const ok = await restoreFrontmatter(skill.name, localFm, false, cwd);
+          if (!ok) {
+            console.log(
+              `  ${DIM}⚠ Frontmatter preservation failed for ${safeName} — local edits may be lost${RESET}`
+            );
+          }
+        }
         successCount++;
         console.log(`  ${TEXT}✓${RESET} Updated ${safeName}`);
       } else {

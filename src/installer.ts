@@ -244,8 +244,10 @@ async function createSymlink(target: string, linkPath: string): Promise<boolean>
         if (resolveSymlinkTarget(linkPath, existingTarget) === resolvedTarget) {
           return true;
         }
+        debugFs('rm', linkPath, { reason: 'replace-symlink' });
         await rm(linkPath);
       } else {
+        debugFs('rm', linkPath, { recursive: true, reason: 'replace-non-symlink' });
         await rm(linkPath, { recursive: true });
       }
     } catch (err: unknown) {
@@ -253,6 +255,7 @@ async function createSymlink(target: string, linkPath: string): Promise<boolean>
       // For ELOOP, try to remove the broken symlink
       if (err && typeof err === 'object' && 'code' in err && err.code === 'ELOOP') {
         try {
+          debugFs('rm', linkPath, { force: true, reason: 'eloop-recovery' });
           await rm(linkPath, { force: true });
         } catch {
           // If we can't remove it, symlink creation will fail and trigger copy fallback
