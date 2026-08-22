@@ -11,4 +11,11 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
   }
 }
 
+// Fork-local: always-on debug logging to the default state file.
+// Explicit overrides still win: SKILLS_DEBUG=stderr, SKILLS_DEBUG=/path,
+// SKILLS_DEBUG_FILE=..., or --debug=/path. Unset => default file.
+if (!process.env.SKILLS_DEBUG && !process.env.SKILLS_DEBUG_FILE) {
+  process.env.SKILLS_DEBUG = '1';
+}
+
 await import('../dist/cli.mjs');
