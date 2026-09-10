@@ -19,6 +19,8 @@
 
 A single CLI entry point routes to command handlers in `src/`. Skills are installed by copying or symlinking `SKILL.md` files into agent-specific directories (`.claude/skills/`, `.cursor/skills/`, `.agents/skills/`, etc.). Two lock files track installations: a global one at `~/.agents/.skill-lock.json` and a project-level `skills-lock.json` (checked into repos).
 
+**Global install model (don't re-diagnose as a bug):** universal agents (project `skillsDir === '.agents/skills'`: Codex, Cursor, Gemini CLI, Amp, OpenCode, Zed, …) all read the shared `~/.agents/skills` globally, so global installs write only the canonical copy — no per-agent symlinks is correct behavior. The per-agent `globalSkillsDir` values (`~/.codex/skills`, `~/.cursor/skills`, …) exist for agent-scoped skills the user wants visible to only one harness. Known cosmetic nit: `isSkillInstalled` still checks the old per-agent global dir, so the add-picker may show a skill as "not installed" for a universal agent that actually sees it via the canonical dir.
+
 **`skills` is not a harness.** It does not write system prompts, decide which skills an LLM sees, or invoke skills at runtime. Harnesses (Claude Code, Devin, Cursor, etc.) read installed `SKILL.md` files directly from disk. This distinction is the reason the fork exists — see [Fork Notes](#fork-notes).
 
 ### Lock file format
