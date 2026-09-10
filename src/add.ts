@@ -939,6 +939,15 @@ async function handleWellKnownSkills(
   console.log();
   const successful = results.filter((r) => r.success);
   const failed = results.filter((r) => !r.success);
+  /**
+   * Skills that ended up with no successful placement at all. Agents that
+   * merely can't host the skill (e.g. no global dir support) are expected
+   * partial failures — only a skill that landed nowhere turns the exit code
+   * non-zero, so scripts and `skills update` can trust the signal.
+   */
+  const skillsWithoutPlacement = new Set(
+    failed.map((r) => r.skill).filter((name) => !results.some((r) => r.skill === name && r.success))
+  );
 
   // Build skillFiles map: { skillName: sourceUrl }
   const skillFiles: Record<string, string> = {};
@@ -1087,6 +1096,11 @@ async function handleWellKnownSkills(
     for (const r of failed) {
       p.log.message(`  ${pc.red('✗')} ${r.skill} → ${r.agent}: ${pc.dim(r.error)}`);
     }
+    // Surface skills that failed everywhere to scripts and `skills update`,
+    // which keys on the child process exit status. exitCode (not exit) so
+    // multi-source flows like `skills install` keep restoring remaining
+    // sources.
+    if (skillsWithoutPlacement.size > 0) process.exitCode = 1;
   }
 
   console.log();
@@ -1844,6 +1858,11 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
     console.log();
     const successful = results.filter((r) => r.success);
     const failed = results.filter((r) => !r.success);
+    const skillsWithoutPlacement = new Set(
+      failed
+        .map((r) => r.skill)
+        .filter((name) => !results.some((r) => r.skill === name && r.success))
+    );
     // Track installation result
     // Build skillFiles map: { skillName: relative path to SKILL.md from repo root }
     const skillFiles: Record<string, string> = {};
@@ -2115,6 +2134,9 @@ export async function runAdd(args: string[], options: AddOptions = {}): Promise<
       for (const r of failed) {
         p.log.message(`  ${pc.red('✗')} ${r.skill} → ${r.agent}: ${pc.dim(r.error)}`);
       }
+      // Surface skills that failed everywhere to scripts and `skills update`
+      // (see the matching block in the well-known/local install path above).
+      if (skillsWithoutPlacement.size > 0) process.exitCode = 1;
     }
 
     console.log();

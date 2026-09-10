@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawnSync, type SpawnSyncReturns } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
 import { lstat } from 'fs/promises';
 import { join, dirname, relative, sep } from 'path';
@@ -42,6 +42,26 @@ import { captureInstalledFrontmatter, restoreFrontmatter } from './frontmatter-p
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const RESET = '\x1b[0m';
+
+/**
+ * Print the tail of a failed `add` subprocess's captured output. The child
+ * runs with stdio piped, so without this the actual failure reason (e.g. the
+ * installer's symlink guard refusing to replace a linked skill) would never
+ * reach the user.
+ */
+function printChildFailureDetail(result: SpawnSyncReturns<string>): void {
+  const lines = [result.stdout, result.stderr]
+    .filter((chunk): chunk is string => typeof chunk === 'string' && chunk.length > 0)
+    .join('\n')
+    // Strip ANSI escapes (clack spinner frames etc.) so only readable lines remain
+    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines.slice(-3)) {
+    console.log(`    ${DIM}${line}${RESET}`);
+  }
+}
 
 /**
  * Result of validating the `agents` lock field.
@@ -674,6 +694,7 @@ export async function processWellKnownUpdates(
       } else {
         failCount++;
         console.log(`  ${DIM}✗ Failed to update ${safeName}${RESET}`);
+        printChildFailureDetail(spawnResult);
       }
     }
   }
@@ -964,6 +985,7 @@ export async function updateGlobalSkills(
     } else {
       failCount++;
       console.log(`  ${DIM}✗ Failed to update ${safeName}${RESET}`);
+      printChildFailureDetail(result);
     }
   }
 
@@ -1225,6 +1247,7 @@ export async function updateProjectSkills(
       } else {
         failCount++;
         console.log(`  ${DIM}✗ Failed to update ${safeName}${RESET}`);
+        printChildFailureDetail(result);
       }
     }
   }

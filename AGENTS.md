@@ -46,7 +46,7 @@ To add a new agent: add its definition to `src/agents.ts`, then run `pnpm run -C
 
 `skills` manages files that harnesses read directly. Users customize how their harness treats a skill by editing the installed `SKILL.md` frontmatter (e.g. `disable-model-invocation: true`). But `skills update` overwrites installed files with fresh upstream copies — silently destroying local edits. Upstream doesn't address this because the use case is invisible to it: `skills` doesn't know about frontmatter fields it doesn't parse, and it doesn't know that harnesses read the files it installs.
 
-The fork bridges that gap with two features. See `docs/fork-changes.md` for implementation details (file paths, function names, test coverage).
+The fork bridges that gap with this, plus two more features. See `docs/fork-changes.md` for implementation details (file paths, function names, test coverage).
 
 ### Custom features
 
@@ -75,6 +75,16 @@ Debug output goes to a file instead of stderr so the Clack pretty TUI stays inta
 - Redaction: Bearer tokens, `ghp_`/`gho_`/`github_pat_`, `token=`, `GITHUB_TOKEN=` are redacted in every log line
 - Writes are sync for `process.exit` safety
 - On exit: single `Debug log: ...` line to stderr pointing at the file
+
+#### 3. Live-symlink guard (never clobber externally owned links)
+
+Installs/updates refuse to replace a **live symlink** (one resolving to an existing file/dir) with
+managed content. This protects dev-repo checkouts linked into skills dirs (e.g.
+`~/.agents/skills/my-skill -> ~/build/my-skills/my-skill`) from being silently swapped for an
+upstream copy by `skills add`/`update`. Dangling links and self-loops are still cleaned (upstream
+#293 behavior). Related honesty fixes: `skills add` now exits 1 when a skill fails to install for
+every targeted agent (used to always exit 0), and `skills update` prints the failed child's output
+instead of swallowing it. See `docs/fork-changes.md` §3.
 
 ### Installing
 

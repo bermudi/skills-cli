@@ -14,6 +14,7 @@ import {
   symlink,
   readdir,
 } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { installSkillForAgent, installBlobSkillForAgent } from '../src/installer.ts';
@@ -293,6 +294,217 @@ describe('installer symlink regression', () => {
       const stats = await lstat(installedPath);
       expect(stats.isDirectory()).toBe(true);
       expect(stats.isSymbolicLink()).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('installer live-symlink guard', () => {
+  /** External "developer checkout" whose content must survive a refused install. */
+  async function makeExternalSkill(root: string, name: string, marker: string): Promise<string> {
+    const dir = join(root, 'external-dev', name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: dev\n---\n\n${marker}\n`
+    );
+    return dir;
+  }
+
+  it('refuses to replace a live symlink at the canonical path (symlink mode)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'add-skill-'));
+    const projectDir = join(root, 'project');
+    await mkdir(projectDir, { recursive: true });
+
+    const skillName = 'dev-owned-skill';
+    const externalDir = await makeExternalSkill(root, skillName, 'dev version');
+    const canonicalDir = join(projectDir, '.agents/skills', skillName);
+    await mkdir(join(projectDir, '.agents/skills'), { recursive: true });
+    // Relative target, as a developer would create it
+    await symlink('../../../external-dev/' + skillName, canonicalDir);
+
+    const skillDir = await makeSkillSource(root, skillName);
+
+    try {
+      const result = await installSkillForAgent(
+        { name: skillName, description: 'test', path: skillDir },
+        'amp', // universal agent: project install writes the canonical path directly
+        { cwd: projectDir, mode: 'symlink', global: false }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Refusing to replace symlink');
+      expect(result.error).toContain(externalDir);
+
+      // The developer's link and its target are untouched
+      expect((await lstat(canonicalDir)).isSymbolicLink()).toBe(true);
+      expect(statSync(externalDir).isDirectory()).toBe(true);
+      await expect(readFile(join(externalDir, 'SKILL.md'), 'utf-8')).resolves.toContain(
+        'dev version'
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('still cleans dangling symlinks at the canonical path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'add-skill-'));
+    const projectDir = join(root, 'project');
+    await mkdir(projectDir, { recursive: true });
+
+    const skillName = 'dangling-target-skill';
+    const skillDir = await makeSkillSource(root, skillName);
+    const canonicalDir = join(projectDir, '.agents/skills', skillName);
+    await mkdir(join(projectDir, '.agents/skills'), { recursive: true });
+    await symlink('./no-such-place', canonicalDir); // dangling: owns nothing
+
+    try {
+      const result = await installSkillForAgent(
+        { name: skillName, description: 'test', path: skillDir },
+        'amp',
+        { cwd: projectDir, mode: 'symlink', global: false }
+      );
+
+      expect(result.success).toBe(true);
+      const stats = await lstat(canonicalDir);
+      expect(stats.isSymbolicLink()).toBe(false);
+      expect(stats.isDirectory()).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to replace a live symlink at the agent path (copy mode)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'add-skill-'));
+    const projectDir = join(root, 'project');
+    await mkdir(projectDir, { recursive: true });
+
+    const skillName = 'dev-owned-copy-skill';
+    const externalDir = await makeExternalSkill(root, skillName, 'dev version');
+    const agentDir = join(projectDir, '.claude/skills', skillName);
+    await mkdir(join(projectDir, '.claude/skills'), { recursive: true });
+    await symlink(externalDir, agentDir);
+
+    const skillDir = await makeSkillSource(root, skillName);
+
+    try {
+      const result = await installSkillForAgent(
+        { name: skillName, description: 'test', path: skillDir },
+        'claude-code',
+        { cwd: projectDir, mode: 'copy', global: false }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Refusing to replace symlink');
+      expect((await lstat(agentDir)).isSymbolicLink()).toBe(true);
+      await expect(readFile(join(externalDir, 'SKILL.md'), 'utf-8')).resolves.toContain(
+        'dev version'
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to replace a live symlink at the canonical path (blob install)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'add-skill-'));
+    const projectDir = join(root, 'project');
+    await mkdir(projectDir, { recursive: true });
+
+    const skillName = 'dev-owned-blob-skill';
+    const externalDir = await makeExternalSkill(root, skillName, 'dev version');
+    const canonicalDir = join(projectDir, '.agents/skills', skillName);
+    await mkdir(join(projectDir, '.agents/skills'), { recursive: true });
+    await symlink(externalDir, canonicalDir);
+
+    try {
+      const result = await installBlobSkillForAgent(
+        {
+          installName: skillName,
+          files: [
+            { path: 'SKILL.md', contents: `---\nname: ${skillName}\ndescription: upstream\n---\n` },
+          ],
+        },
+        'amp',
+        { cwd: projectDir, mode: 'symlink', global: false }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Refusing to replace symlink');
+      expect((await lstat(canonicalDir)).isSymbolicLink()).toBe(true);
+      await expect(readFile(join(externalDir, 'SKILL.md'), 'utf-8')).resolves.toContain(
+        'dev version'
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to replace a live symlink at the Eve flat skill path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'add-skill-'));
+    const projectDir = join(root, 'project');
+    await mkdir(projectDir, { recursive: true });
+
+    const skillName = 'dev-owned-eve-skill';
+    const externalFile = join(root, 'external-dev', skillName + '.md');
+    await mkdir(join(root, 'external-dev'), { recursive: true });
+    await writeFile(externalFile, '---\nname: ' + skillName + '\ndescription: dev\n---\n');
+
+    const flatPath = join(projectDir, 'agent/skills', skillName + '.md');
+    await mkdir(join(projectDir, 'agent/skills'), { recursive: true });
+    await symlink(externalFile, flatPath);
+
+    try {
+      // No SKILL.md among files → Eve installs as a flat .md file
+      const result = await installBlobSkillForAgent(
+        { installName: skillName, files: [{ path: 'reference.md', contents: 'x' }] },
+        'eve',
+        { cwd: projectDir, mode: 'symlink', global: false }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Refusing to replace symlink');
+      expect((await lstat(flatPath)).isSymbolicLink()).toBe(true);
+      await expect(readFile(externalFile, 'utf-8')).resolves.toContain('description: dev');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('installs normally once the developer removes the link', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'add-skill-'));
+    const projectDir = join(root, 'project');
+    await mkdir(projectDir, { recursive: true });
+
+    const skillName = 'recovery-skill';
+    const externalDir = await makeExternalSkill(root, skillName, 'dev version');
+    const canonicalDir = join(projectDir, '.agents/skills', skillName);
+    await mkdir(join(projectDir, '.agents/skills'), { recursive: true });
+    await symlink(externalDir, canonicalDir);
+
+    const skillDir = await makeSkillSource(root, skillName);
+
+    try {
+      const refused = await installSkillForAgent(
+        { name: skillName, description: 'test', path: skillDir },
+        'amp',
+        { cwd: projectDir, mode: 'symlink', global: false }
+      );
+      expect(refused.success).toBe(false);
+
+      // Developer deliberately hands the path over to skills
+      await rm(canonicalDir);
+
+      const result = await installSkillForAgent(
+        { name: skillName, description: 'test', path: skillDir },
+        'amp',
+        { cwd: projectDir, mode: 'symlink', global: false }
+      );
+
+      expect(result.success).toBe(true);
+      const stats = await lstat(canonicalDir);
+      expect(stats.isSymbolicLink()).toBe(false);
+      expect(stats.isDirectory()).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

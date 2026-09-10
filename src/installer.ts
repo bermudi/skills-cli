@@ -162,7 +162,40 @@ function resolveSymlinkTarget(linkPath: string, linkTarget: string): string {
  * 2. Symlinks (including self-referential ones causing ELOOP) are handled
  *    when canonical and agent paths resolve to the same location
  */
+/**
+ * Refuse to install over a "live" symlink — one that resolves to an existing
+ * file or directory. Such a link is owned by something outside skills (e.g. a
+ * developer's checkout linked into ~/.agents/skills), and rm() would silently
+ * replace it with a fresh copy of installed content. Throwing here surfaces
+ * the refusal as a failed install via the surrounding catch blocks.
+ *
+ * Dangling links and self-loops (see #293) own nothing, so they stay debris
+ * that cleanAndCreateDirectory is allowed to remove.
+ */
+async function assertNoLiveSymlink(path: string): Promise<void> {
+  let stats;
+  try {
+    stats = await lstat(path);
+  } catch {
+    return; // Missing (or unreadable) target — nothing to protect.
+  }
+  if (!stats.isSymbolicLink()) return;
+  const rawTarget = await readlink(path).catch(() => null);
+  if (rawTarget === null) return; // Unreadable link — treat as debris.
+  const resolvedTarget = resolveSymlinkTarget(path, rawTarget);
+  try {
+    await stat(resolvedTarget);
+  } catch {
+    return; // Dangling link or self-loop — safe to clean up.
+  }
+  debugFs('symlink-guard', path, { target: resolvedTarget });
+  throw new Error(
+    `Refusing to replace symlink ${path} -> ${resolvedTarget}. Remove the symlink if you want skills to manage this path.`
+  );
+}
+
 async function cleanAndCreateDirectory(path: string): Promise<void> {
+  await assertNoLiveSymlink(path);
   const t0 = Date.now();
   debugFs('rm', path, { recursive: true });
   try {
@@ -988,6 +1021,7 @@ export async function installBlobSkillForAgent(
     try {
       debugFs('mkdir', agentBase, { recursive: true });
       await mkdir(agentBase, { recursive: true });
+      await assertNoLiveSymlink(flatSkillPath);
       debugFs('rm', flatSkillPath, { recursive: true });
       await rm(flatSkillPath, { recursive: true, force: true });
       debugFs('writeFile', flatSkillPath, {
